@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#191919">
+  <title>Le Chiffre</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./script.js" defer></script>
+</head>
+<body>
+  <main>
+    <section class="terminal" aria-labelledby="project-title">
+      <header class="titlebar">
+        <span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+        <h1 id="project-title">LE CHIFFRE</h1>
+      </header>
+      <div class="conversation">
+        <div id="messages" role="log" aria-label="Переписка с Le Chiffre" aria-live="polite" aria-relevant="additions" tabindex="0"></div>
+      </div>
+      <form id="message-form" novalidate>
+        <label class="sr-only" for="message">Ответ на вопрос</label>
+        <input id="message" name="message" placeholder="Сообщение" autocomplete="off" spellcheck="false" required>
+        <button id="send" type="submit">Отправить <span aria-hidden="true">↑</span></button>
+      </form>
+      <p id="composer-status" class="sr-only" role="status"></p>
+    </section>
+    <noscript>Для переписки и проверки ответа включи JavaScript.</noscript>
+  </main>
+</body>
+</html>
