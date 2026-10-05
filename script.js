@@ -1,35 +1,59 @@
 "use strict";
-const GIFT_CODE = "7CDEEBED04964081";
-const QUESTIONS = [
-  { text: "Мир полон…", answer: "банальности" },
-  { text: "Жить словами тех, кто ушёл, …", answer: "отвратительно" },
-  { text: "Иметь предубеждение — не…", answer: "комильфо" },
-  { text: "В этом мире вообще лучше поменьше…", answer: "знать" },
-  { text: "Что расположено у тебя в груди?", answer: "пустота" },
-  { text: "Жизнь…", answer: "прекрасна" },
-  { text: "Она близка к…", answer: "истине" },
-  { text: "Улыбаясь даже в…", answer: "невзгоды" },
-  { text: "Когда относишься к подаркам людей как к…", answer: "мусору" },
-  { text: "Кто-то вторгся в твою…", answer: "душу" },
-  { text: "Почему так много жизней пожертвовано ради…", answer: "одной" },
-  { text: "Улыбаться — это очень…", answer: "важно" },
-  { text: "Жить, чтобы убивать? Или жить, чтобы…", answer: "умереть" },
-  { text: "От тебя веет…", answer: "опасностью" },
-  { text: "В этот момент слова вылетают…", answer: "бездумно" },
-  { text: "Нет смысла терять тут…", answer: "время" }
-];
 const $ = id => document.getElementById(id);
 const messages = $("messages");
 const input = $("message");
 const send = $("send");
 const terminal = document.querySelector(".terminal");
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-let stage = "riddle";
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+const keyParts = [];
+let puzzle;
+let photoUrl;
+let stage = "loading";
 let questionIndex = 0;
 let busy = false;
 
 function normalizeAnswer(value) {
   return value.normalize("NFKC").toLocaleLowerCase("ru").replace(/ё/g, "е").replace(/[\s«»"'.,!?…]+/g, "");
+}
+
+function decodeBase64(value) {
+  return Uint8Array.from(atob(value), character => character.charCodeAt(0));
+}
+
+async function unlockAnswer(answer, question) {
+  const material = await crypto.subtle.importKey("raw", encoder.encode(normalizeAnswer(answer)), "PBKDF2", false, ["deriveKey"]);
+  for (const variant of question.variants) {
+    const key = await crypto.subtle.deriveKey({
+      name: "PBKDF2", hash: "SHA-256", iterations: puzzle.iterations, salt: decodeBase64(variant.salt)
+    }, material, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+    try {
+      const part = await crypto.subtle.decrypt({
+        name: "AES-GCM", iv: decodeBase64(variant.iv),
+        additionalData: encoder.encode(`${puzzle.id}:question:${question.number}`)
+      }, key, decodeBase64(variant.ciphertext));
+      if (part.byteLength !== 32) throw new Error("Некорректный фрагмент ключа");
+      return new Uint8Array(part);
+    } catch (error) {
+      if (error.name !== "OperationError") throw error;
+    }
+  }
+  return null;
+}
+
+async function unlockReward(parts) {
+  const combined = new Uint8Array(parts.length * 32);
+  parts.forEach((part, index) => combined.set(part, index * 32));
+  const digest = await crypto.subtle.digest("SHA-256", combined);
+  const key = await crypto.subtle.importKey("raw", digest, "AES-GCM", false, ["decrypt"]);
+  const response = await fetch("./reward.bin", { cache: "no-store" });
+  if (!response.ok) throw new Error("Не удалось загрузить подарок");
+  const plaintext = await crypto.subtle.decrypt({
+    name: "AES-GCM", iv: decodeBase64(puzzle.reward.iv),
+    additionalData: encoder.encode(`${puzzle.id}:reward`)
+  }, key, await response.arrayBuffer());
+  return JSON.parse(decoder.decode(plaintext));
 }
 
 async function addMessage(text, author = "project", success = false) {
@@ -66,16 +90,17 @@ async function addMessage(text, author = "project", success = false) {
 }
 
 function updateSendState() {
-  send.disabled = busy || stage === "success" || !input.value.trim();
+  send.disabled = busy || stage !== "riddle" || !input.value.trim();
 }
 
-function addPhotoMessage() {
+function addPhotoMessage(photoData) {
   const message = document.createElement("figure");
   message.className = "message message--project message--photo";
   message.setAttribute("aria-label", "Le Chiffre: фотография");
   const photo = document.createElement("img");
   photo.className = "message-photo";
-  photo.src = "./assets/final-photo.jpg";
+  photoUrl = URL.createObjectURL(new Blob([decodeBase64(photoData)], { type: "image/jpeg" }));
+  photo.src = photoUrl;
   photo.alt = "Человек в очках на фоне бетонной площадки и деревьев";
   photo.width = 768;
   photo.height = 1024;
@@ -96,7 +121,7 @@ function addPhotoMessage() {
 
 function setBusy(value) {
   busy = value;
-  input.disabled = value || stage === "success";
+  input.disabled = value || stage !== "riddle";
   updateSendState();
   $("composer-status").textContent = value ? "Le Chiffre отвечает…" : "";
 }
@@ -119,45 +144,67 @@ input.addEventListener("input", () => {
 
 $("message-form").addEventListener("submit", async event => {
   event.preventDefault();
-  if (busy || stage === "success") return;
+  if (busy || stage !== "riddle") return;
   const answer = input.value.trim();
   if (!answer) return;
   input.removeAttribute("aria-invalid");
   setBusy(true);
   try {
     await addMessage(answer, "user");
-    input.value = "";
-    if (stage === "riddle") {
-      if (normalizeAnswer(answer) === QUESTIONS[questionIndex].answer) {
-        questionIndex++;
-        if (questionIndex < QUESTIONS.length) {
-          await addMessage(QUESTIONS[questionIndex].text);
-        } else {
-          stage = "success";
-          for (let index = 0; index < 13; index++) {
-            await addMessage("я тебя могну");
-          }
-          addPhotoMessage();
-          await addMessage("…");
-          await addMessage(GIFT_CODE, "project", true);
-        }
-      } else {
-        await showIncorrectAnswer();
-        await addMessage(QUESTIONS[questionIndex].text);
-      }
+    const question = puzzle.questions[questionIndex];
+    const part = await unlockAnswer(answer, question);
+    if (!part) {
+      input.value = "";
+      await showIncorrectAnswer();
+      await addMessage(question.text);
       return;
+    }
+    if (questionIndex === puzzle.questions.length - 1) {
+      const reward = await unlockReward([...keyParts, part]);
+      input.value = "";
+      questionIndex++;
+      stage = "success";
+      keyParts.length = 0;
+      for (let index = 0; index < 13; index++) {
+        await addMessage("я тебя могну");
+      }
+      addPhotoMessage(reward.photo);
+      await addMessage("…");
+      await addMessage(reward.code, "project", true);
+    } else {
+      keyParts.push(part);
+      input.value = "";
+      questionIndex++;
+      await addMessage(puzzle.questions[questionIndex].text);
     }
   } catch (error) {
     console.error(error);
+    await addMessage("Не удалось обработать ответ. Попробуй отправить его ещё раз.");
   } finally {
     setBusy(false);
-    if (stage !== "success") input.focus();
+    if (stage === "riddle") input.focus();
   }
 });
 
 async function startConversation() {
   setBusy(true);
-  await addMessage(QUESTIONS[0].text);
-  setBusy(false);
+  try {
+    if (!globalThis.crypto?.subtle) throw new Error("Web Crypto недоступен");
+    const response = await fetch("./puzzle.json", { cache: "no-store" });
+    if (!response.ok) throw new Error("Не удалось загрузить вопросы");
+    puzzle = await response.json();
+    if (puzzle.version !== 1 || puzzle.questions.length !== 16) throw new Error("Некорректный формат квеста");
+    stage = "riddle";
+    await addMessage(puzzle.questions[0].text);
+  } catch (error) {
+    stage = "error";
+    console.error(error);
+    await addMessage("Не удалось загрузить квест. Обнови страницу или попробуй позже.");
+  } finally {
+    setBusy(false);
+  }
 }
+window.addEventListener("pagehide", () => {
+  if (photoUrl) URL.revokeObjectURL(photoUrl);
+});
 startConversation();
